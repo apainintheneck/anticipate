@@ -2,22 +2,47 @@ require "../lib/lib_pty"
 
 module Anticipate
   class Pty
-    class OpenError < StandardError; end
+    class OpenException < Exception
+      def initialize(method : String, cause : Exception? = nil)
+        message = "errno #{Errno.value}: failed when calling the #{method} method"
+        super(message, cause)
+      end
+    end
+
+    getter control_tty : IO::FileDescriptor
+    getter process_tty : File
 
     def initialize
-      # https://cs.opensource.google/go/go/+/refs/tags/go1.19.13:src/os/signal/internal/pty/pty.go
-      # Use IO::FileDescriptor to open this after we're done calling functions on it
-      primary_fd = LibPty.posix_openpt(LibC::O_RDWR)
+      @control_tty = build_control_tty
+      @process_tty = build_process_tty
+    end
 
-      raise OpenError, "posix_openpt" if primary_fd.negative?
-      raise OpenError, "grantpt" if LibPty.grantpt(primary_fd).negative?
-      raise OpenError, "unlockpt" if LibPty.unlockpt(primary_fd).negative?
+    def finalize
+      process_tty.close if process_tty
+      control_tty.finalize if control_tty
+    end
 
-      secondary_name = LibPty.ptsname(primary_fd)
-      raise OpenError, "ptsname" if secondary_name.null?
+    # https://cs.opensource.google/go/go/+/refs/tags/go1.19.13:src/os/signal/internal/pty/pty.go
+    # https://cs.opensource.google/go/go/+/refs/tags/go1.19.13:src/os/signal/signal_cgo_test.go
 
-      secondary_name = String.new(secondary_name)
-      # https://cs.opensource.google/go/go/+/refs/tags/go1.19.13:src/os/signal/signal_cgo_test.go
+    private def build_control_tty : IO::FileDescriptor
+      control_tty_fd = LibPTY.posix_openpt(LibC::O_RDWR)
+
+      raise OpenException.new("posix_openpt") if control_tty_fd.negative?
+      raise OpenException.new("grantpt") if LibPTY.grantpt(control_tty_fd).negative?
+      raise OpenException.new("unlockpt") if LibPTY.unlockpt(control_tty_fd).negative?
+
+      IO::FileDescriptor.new(control_tty_fd, blocking: true).tap do |fd|
+        fd.sync = true
+      end
+    end
+
+    private def build_process_tty : File
+      process_tty_path = LibPTY.ptsname(control_tty.fd)
+      raise OpenException.new("ptsname") if process_tty_path.null?
+
+      process_tty_path = String.new(process_tty_path)
+      File.open(process_tty_path, "w+")
     end
   end
 end
