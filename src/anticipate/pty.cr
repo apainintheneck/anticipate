@@ -10,7 +10,7 @@ module Anticipate
     end
 
     getter control_tty : IO::FileDescriptor
-    getter process_tty : File
+    getter process_tty : IO::FileDescriptor
 
     def initialize
       @control_tty = build_control_tty
@@ -37,12 +37,16 @@ module Anticipate
       end
     end
 
-    private def build_process_tty : File
+    private def build_process_tty : IO::FileDescriptor
       process_tty_path = LibPTY.ptsname(control_tty.fd)
       raise OpenException.new("ptsname") if process_tty_path.null?
 
-      process_tty_path = String.new(process_tty_path)
-      File.open(process_tty_path, "w+")
+      process_tty_fd = LibC.open(process_tty_path, LibC::O_RDWR)
+      IO::FileDescriptor.new(process_tty_fd).tap do |fd|
+        # Broken until https://github.com/crystal-lang/crystal/pull/14529
+        # Will likely be released in Crystal 1.13.x
+        fd.raw!
+      end
     end
   end
 end

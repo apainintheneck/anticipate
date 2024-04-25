@@ -38,8 +38,6 @@ module Anticipate
         output: @pty.process_tty,
         error: @pty.process_tty
       )
-
-      @pty.process_tty.close
     end
 
     def send(message : String, file = __FILE__, line = __LINE__)
@@ -50,22 +48,26 @@ module Anticipate
 
     def receive(message : String | Regex, file = __FILE__, line = __LINE__)
       stoppable(file, line) do
-        next if case message
-        when String
-          response = @pty.control_tty.gets message.size
-          message == response
-        when Regex
-          response = String.build do |builder|
-            loop do
-              chunk = @pty.control_tty.gets 512
-              break if chunk.nil?
-              break if chunk.empty?
+        response = IO::Memory.new(capacity: 1024).tap do |buffer|
+          bytes = Bytes.new(128)
+          loop do
+            bytes_read = @pty.control_tty.read bytes
+            break if bytes_read.zero?
 
-              builder << chunk
-              break if chunk.size < 512
+            if bytes_read == bytes.size
+              buffer.write bytes
+            else
+              buffer.write bytes[0...bytes_read]
+              break
             end
           end
-          message.matches? response if response
+        end.to_s
+
+        next if case message
+        when String
+          message == response
+        when Regex
+          message.matches? response
         end
 
         raise StopException.new(<<-ERROR)
